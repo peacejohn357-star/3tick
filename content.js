@@ -52,10 +52,11 @@
   let signals     = [];  // { type, price, time, result, ticksAfter, priceAfter }
   let wins        = 0;
   let losses      = 0;
-  let lastSignalTickIndex     = -999; // tick buffer index of last fired signal (cooldown tracking)
+  let tickSeq                 = 0;    // monotonic tick sequence (never shrinks when tick buffer shifts)
+  let lastSignalTickIndex     = -999; // tick sequence index of last fired signal (cooldown tracking)
   let lastSignalSide          = null; // 'BUY' | 'SELL' | null – for same-side cooldown
-  let lastSignalSideTickIndex = -999; // tick buffer index of last same-side signal
-  let pendingSetup            = null; // { side: 'BUY'|'SELL', tickIndex, hist } – two-stage entry confirmation
+  let lastSignalSideTickIndex = -999; // tick sequence index of last same-side signal
+  let pendingSetup            = null; // { side: 'BUY'|'SELL', tickIndex, hist, createdAt } – two-stage entry confirmation
 
   let lastTickProcessedAt  = 0;    // Date.now() of last tick received (for watchdog)
   let lastSignalEvalAt     = 0;    // Date.now() of last successful detectSignal() call (for watchdog)
@@ -541,6 +542,7 @@
     if (!tick || tick.symbol !== resolvedSymbol) return;
     const price = parseFloat(tick.quote);
     const time  = tick.epoch;
+    tickSeq++;
 
     ticks.push({ price, time });
     if (ticks.length > TICK_BUF) ticks.shift();
@@ -787,7 +789,8 @@
     }
 
     // ── Gate 4: Cooldown ──────────────────────────────────────────────────
-    const ticksSinceLast = (n - 1) - lastSignalTickIndex;
+    const currentTickIndex = tickSeq;
+    const ticksSinceLast = currentTickIndex - lastSignalTickIndex;
     if (ticksSinceLast < cfg.cooldownTicks) {
       if (cfg.debugSignals) console.log(`[3Tick][signal] rejected: cooldown (${ticksSinceLast} ticks since last, need ${cfg.cooldownTicks})`);
       return { spikePct, candidate, rejectReason: 'cooldown', fired: false };
@@ -802,7 +805,7 @@
       return { spikePct, candidate, rejectReason: 'duplicate', fired: false };
     }
 
-    lastSignalTickIndex = n - 1;
+    lastSignalTickIndex = currentTickIndex;
 
     const sig = { type: sigType, price: sigPrice, time: sigTime, result: 'PENDING', ticksAfter: [] };
     signals.push(sig);
@@ -1489,7 +1492,8 @@
     }
 
     // 7. Global cooldown guard
-    const ticksSinceLast = (n - 1) - lastSignalTickIndex;
+    const currentTickIndex = tickSeq;
+    const ticksSinceLast = currentTickIndex - lastSignalTickIndex;
     if (ticksSinceLast < cfg.cooldownTicks) {
       if (cfg.debugSignals) console.log('[3Tick][indicator] rejected: cooldown (' + ticksSinceLast + ' ticks since last, need ' + cfg.cooldownTicks + ')');
       return Object.assign(baseResult, { candidate, rejectReason: 'cooldown', fired: false });
@@ -1498,7 +1502,7 @@
     // 8. Same-side cooldown guard
     const sameSideCooldown = cfg.sameSideCooldownTicks != null ? cfg.sameSideCooldownTicks : 5;
     if (lastSignalSide === candidate) {
-      const ticksSinceLastSameSide = (n - 1) - lastSignalSideTickIndex;
+      const ticksSinceLastSameSide = currentTickIndex - lastSignalSideTickIndex;
       if (ticksSinceLastSameSide < sameSideCooldown) {
         if (cfg.debugSignals) console.log('[3Tick][indicator] rejected: same_side_cooldown (' + candidate + ' ' + ticksSinceLastSameSide + ' ticks since last, need ' + sameSideCooldown + ')');
         return Object.assign(baseResult, { candidate, rejectReason: 'same_side_cooldown', fired: false });
@@ -1536,10 +1540,10 @@
     // 11. Two-stage setup → trigger confirmation (balanced/strict profiles only)
     if (thresholds.twoStage) {
       if (pendingSetup && pendingSetup.side === candidate) {
-        const ticksSinceSetup = (n - 1) - pendingSetup.tickIndex;
+        const ticksSinceSetup = currentTickIndex - pendingSetup.tickIndex;
         if (ticksSinceSetup > thresholds.setupTimeoutTicks) {
           // Setup expired – restart with this tick as new setup
-          pendingSetup = { side: candidate, tickIndex: n - 1, hist: tickMacd.hist, createdAt: Date.now() };
+          pendingSetup = { side: candidate, tickIndex: currentTickIndex, hist: tickMacd.hist, createdAt: Date.now() };
           if (cfg.debugSignals) console.log('[3Tick][indicator] setup_timeout for ' + candidate + ', restarting setup');
           return Object.assign(baseResult, {
             candidate, rejectReason: 'setup_timeout', fired: false,
@@ -1566,8 +1570,8 @@
         if (pendingSetup && pendingSetup.side !== candidate) {
           if (cfg.debugSignals) console.log('[3Tick][indicator] setup_side_flip: discarding ' + pendingSetup.side + ' setup, starting ' + candidate + ' setup');
         }
-        pendingSetup = { side: candidate, tickIndex: n - 1, hist: tickMacd.hist, createdAt: Date.now() };
-        if (cfg.debugSignals) console.log('[3Tick][indicator] setup_pending for ' + candidate + ' at tick ' + (n - 1));
+        pendingSetup = { side: candidate, tickIndex: currentTickIndex, hist: tickMacd.hist, createdAt: Date.now() };
+        if (cfg.debugSignals) console.log('[3Tick][indicator] setup_pending for ' + candidate + ' at tick ' + currentTickIndex);
         return Object.assign(baseResult, {
           candidate, rejectReason: 'setup_pending', fired: false,
           chopScore: chopResult.chopScore, alignmentScoreBuy: buyAlignment, alignmentScoreSell: sellAlignment,
@@ -1584,9 +1588,9 @@
       return Object.assign(baseResult, { candidate, rejectReason: 'duplicate', fired: false });
     }
 
-    lastSignalTickIndex     = n - 1;
+    lastSignalTickIndex     = currentTickIndex;
     lastSignalSide          = candidate;
-    lastSignalSideTickIndex = n - 1;
+    lastSignalSideTickIndex = currentTickIndex;
 
     const sig = { type: candidate, price: sigPrice, time: sigTime, result: 'PENDING', ticksAfter: [] };
     signals.push(sig);
