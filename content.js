@@ -21,6 +21,7 @@
   const WATCHDOG_EVAL_TIMEOUT  = 20000; // ms – ticks arriving but eval stalled → reset eval state
   const WATCHDOG_SETUP_STALE_MS = 20000; // ms – pending setup older than this is considered stuck
   const WATCHDOG_RESUB_GRACE    = 3;    // multiplier: resub window = WATCHDOG_TICK_TIMEOUT * this
+  const WATCHDOG_RESUB_GRACE_MS = WATCHDOG_TICK_TIMEOUT * WATCHDOG_RESUB_GRACE; // escalation window before reconnect
 
   let cfg = {
     // ── Strategy mode ──────────────────────────────────────────────────────
@@ -56,7 +57,7 @@
   let lastSignalTickIndex     = -999; // tick sequence index of last fired signal (cooldown tracking)
   let lastSignalSide          = null; // 'BUY' | 'SELL' | null – for same-side cooldown
   let lastSignalSideTickIndex = -999; // tick sequence index of last same-side signal
-  let pendingSetup            = null; // { side: 'BUY'|'SELL', tickIndex, hist, createdAt } – two-stage entry confirmation
+  let pendingSetup            = null; // { side: 'BUY'|'SELL', tickIndex, hist, createdAt } where tickIndex is monotonic tickSeq
 
   let lastTickProcessedAt  = 0;    // Date.now() of last tick received (for watchdog)
   let lastSignalEvalAt     = 0;    // Date.now() of last successful detectSignal() call (for watchdog)
@@ -1571,7 +1572,7 @@
           if (cfg.debugSignals) console.log('[3Tick][indicator] setup_side_flip: discarding ' + pendingSetup.side + ' setup, starting ' + candidate + ' setup');
         }
         pendingSetup = { side: candidate, tickIndex: currentTickIndex, hist: tickMacd.hist, createdAt: Date.now() };
-        if (cfg.debugSignals) console.log('[3Tick][indicator] setup_pending for ' + candidate + ' at tick ' + currentTickIndex);
+        if (cfg.debugSignals) console.log('[3Tick][indicator] setup_pending for ' + candidate + ' at tick_seq ' + currentTickIndex);
         return Object.assign(baseResult, {
           candidate, rejectReason: 'setup_pending', fired: false,
           chopScore: chopResult.chopScore, alignmentScoreBuy: buyAlignment, alignmentScoreSell: sellAlignment,
@@ -1839,7 +1840,7 @@
         //    tickAge < 0 means lastTickProcessedAt is still 0 (no tick ever received on this session)
         if (tickAge < 0 || tickAge > WATCHDOG_TICK_TIMEOUT) {
           const resubRecently = watchdogLastResubAt > 0 &&
-                                (now - watchdogLastResubAt) < WATCHDOG_TICK_TIMEOUT * WATCHDOG_RESUB_GRACE;
+                                (now - watchdogLastResubAt) < WATCHDOG_RESUB_GRACE_MS;
           if (resubRecently) {
             // Already resubscribed but still stale → escalate to full reconnect
             console.warn('[3Tick][watchdog] watchdog_recover_reconnect: still no tick after resubscribe, reconnecting');
