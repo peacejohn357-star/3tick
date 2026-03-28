@@ -57,7 +57,6 @@
     debugSignals:     true,    // log signal accept/reject reasons to console
     // ── Real-trade execution settings ──────────────────────────────────────
     realTradeEnabled: false,   // master toggle for real trade execution
-    realStake:        0.35,    // stake amount for real trades (default minimum)
     realTimeoutMs:    40000,   // ms – wait for close confirmation before RECOVERY
   };
 
@@ -89,7 +88,7 @@
 
   // ── Real-trade state ──────────────────────────────────────────────────────
   let realExecState   = 'IDLE'; // IDLE | OPEN_PENDING | OPEN | CLOSE_PENDING | RECOVERY
-  let realTrades      = [];     // { time, signal, side, stake, result, pnl, ... }
+  let realTrades      = [];     // { time, signal, side, result, pnl, ... }
   let realOpenCount   = 0;
   let realWins        = 0;
   let realLosses      = 0;
@@ -265,10 +264,6 @@
           <div class="tt-config-row">
             <label style="color:#f0a060;font-weight:700;">Enable Real Execution</label>
             <input type="checkbox" id="tt-cfg-real-enabled">
-          </div>
-          <div class="tt-config-row">
-            <label>Stake (USD)</label>
-            <input type="number" id="tt-cfg-real-stake" min="0.35" max="5000" step="0.05" value="0.35">
           </div>
         </div>
         <button id="tt-export">⬇ Export CSV</button>
@@ -452,12 +447,6 @@
     // ── Real Execution Buttons ──────────────────────────────────────────
     document.getElementById('tt-cfg-real-enabled').addEventListener('change', function () {
       cfg.realTradeEnabled = this.checked;
-      saveCfg();
-    });
-
-    document.getElementById('tt-cfg-real-stake').addEventListener('change', function () {
-      const v = parseFloat(this.value);
-      cfg.realStake = (!isNaN(v) && v >= 0.35) ? v : 0.35;
       saveCfg();
     });
 
@@ -1796,14 +1785,13 @@
       showAlert('No real-trade history to export.');
       return;
     }
-    const headers = ['Time', 'Signal', 'Side', 'Stake', 'Result', 'PnL', 'Open Seen At', 'Close Seen At', 'Duration (ms)', 'Source'];
+    const headers = ['Time', 'Signal', 'Side', 'Result', 'PnL', 'Open Seen At', 'Close Seen At', 'Duration (ms)', 'Source'];
     const rows = [headers];
     realTrades.forEach(function (t) {
       rows.push([
         new Date(t.time).toISOString(),
         t.signal,
         t.side,
-        t.stake,
         t.result,
         t.pnl !== undefined ? t.pnl.toFixed(2) : '',
         t.open_seen_at ? new Date(t.open_seen_at).toISOString() : '',
@@ -1954,8 +1942,6 @@
 
     const realEnabledEl = document.getElementById('tt-cfg-real-enabled');
     if (realEnabledEl) realEnabledEl.checked = !!cfg.realTradeEnabled;
-    const realStakeEl = document.getElementById('tt-cfg-real-stake');
-    if (realStakeEl)   realStakeEl.value   = cfg.realStake || 0.35;
 
     syncStrategyModeUI(cfg.strategyMode || 'indicator');
     updateRealUI();
@@ -2201,7 +2187,7 @@
       const btn = document.querySelector(SEL_PURCHASE_BTN);
       if (!btn) throw new Error('purchase_btn_missing');
 
-      btn.click();
+      simulateExternalClick(btn);
       console.log(`[3Tick][real] CLICKED ${side} (${buyLabel})`);
 
       // 4. Record pending real trade
@@ -2209,7 +2195,6 @@
         time:         Date.now(),
         signal:       side,
         side:         buyLabel,
-        stake:        cfg.realStake,
         result:       'PENDING',
         open_seen_at: Date.now(),
         status_source: 'automation'
@@ -2243,11 +2228,19 @@
       const sideBtns = Array.from(document.querySelectorAll(SEL_SIDE_BTNS));
       const target = sideBtns.find(b => b.innerText.includes(label));
       if (target) {
-        target.click();
+        simulateExternalClick(target);
         await new Promise(r => setTimeout(r, 200)); // wait for DOM update
       }
     }
     return false;
+  }
+
+  function simulateExternalClick (el) {
+    if (!el) return;
+    const opts = { bubbles: true, cancelable: true, view: window };
+    el.dispatchEvent(new MouseEvent('mousedown', opts));
+    el.dispatchEvent(new MouseEvent('mouseup',   opts));
+    el.dispatchEvent(new MouseEvent('click',     opts));
   }
 
   async function waitRealBuyReady () {
